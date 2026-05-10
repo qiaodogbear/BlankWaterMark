@@ -1,0 +1,74 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color: #17201b;
+  background: #f7f3ea;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.dark {
+  color: #edf6ef;
+  background: #111714;
+}
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  margin: 0;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: 2px solid #b66b45;
+  outline-offset: 2px;
+}
+
+.panel {
+  @apply border border-black/10 bg-white/80 shadow-soft backdrop-blur dark:border-white/10 dark:bg-white/[0.06];
+}
+
+.control {
+  @apply rounded-md border border-black/10 bg-white px-3 py-2 text-sm text-ink shadow-sm transition dark:border-white/10 dark:bg-white/10 dark:text-white;
+}
+
+.label {
+  @apply text-xs font-semibold uppercase tracking-normal text-ink/60 dark:text-white/55;
+}
+
+.icon-button {
+  @apply inline-flex h-10 w-10 items-center justify-center rounded-md border border-black/10 bg-white text-ink shadow-sm transition hover:border-copper hover:text-copper disabled:cursor-not-allowed disabled:opacity-45 dark:border-white/10 dark:bg-white/10 dark:text-white dark:hover:text-copper;
+}
+
+.primary-button {
+  @apply inline-flex items-center justify-center gap-2 rounded-md bg-ink px-4 py-2 text-sm font-semibold text-white transition hover:bg-moss disabled:cursor-not-allowed disabled:opacity-50 dark:bg-mint dark:text-ink dark:hover:bg-white;
+}
+
+.secondary-button {
+  @apply inline-flex items-center justify-center gap-2 rounded-md border border-black/10 bg-white px-4 py-2 text-sm font-semibold text-ink transition hover:border-copper hover:text-copper disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/10 dark:bg-white/10 dark:text-white dark:hover:text-copper;
+}
+
+.segmented {
+  @apply grid overflow-hidden rounded-md border border-black/10 bg-white dark:border-white/10 dark:bg-white/10;
+}
+
+.segmented button {
+  @apply px-3 py-2 text-sm font-semibold text-ink/70 transition hover:bg-mint/70 dark:text-white/70 dark:hover:bg-white/10;
+}
+
+.segmented button[data-active='true'] {
+  @apply bg-ink text-white dark:bg-mint dark:text-ink;
+}
