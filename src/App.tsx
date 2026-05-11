@@ -1,19 +1,28 @@
 import {
   Activity,
+  Archive,
+  Columns2,
+  FileImage,
   FlaskConical,
   Github,
+  Info,
+  Layers,
+  ListChecks,
+  Lock,
+  PackageOpen,
+  Play,
   Save,
+  SearchCheck,
   Share2,
   ShieldCheck,
+  Upload,
+  X,
 } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
-import { AdvancedPanel } from './components/AdvancedPanel';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
+import clsx from 'clsx';
 import { BatchPanel } from './components/BatchPanel';
-import { DetectPanel } from './components/DetectPanel';
-import { EmbedPanel } from './components/EmbedPanel';
-import { ImageDropzone } from './components/ImageDropzone';
 import { MetadataPanel } from './components/MetadataPanel';
-import { PreviewCompare } from './components/PreviewCompare';
 import { ResultPanel } from './components/ResultPanel';
 import { StatusLog } from './components/StatusLog';
 import { ThemeToggle } from './components/ThemeToggle';
@@ -43,6 +52,8 @@ interface BatchItem {
   status: string;
   url?: string;
 }
+
+type ModalKey = 'result' | 'metadata' | 'logs' | 'batch' | null;
 
 const SAMPLE_JSON = '{\n  "owner": "Alice",\n  "asset": "campaign-2026-05",\n  "license": "internal"\n}';
 
@@ -95,9 +106,64 @@ async function imageRoundTrip(image: RgbaImage, type: string, quality: number, s
   return fileToImageData(new File([blob], 'robustness.jpg', { type }));
 }
 
+function CompactButton({
+  children,
+  disabled,
+  onClick,
+  tone = 'secondary',
+}: {
+  children: ReactNode;
+  disabled?: boolean;
+  onClick?: () => void;
+  tone?: 'primary' | 'secondary';
+}) {
+  return (
+    <button
+      className={tone === 'primary' ? 'primary-button min-h-10 px-3' : 'secondary-button min-h-10 px-3'}
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+    >
+      {children}
+    </button>
+  );
+}
+
+function Modal({
+  title,
+  open,
+  onClose,
+  children,
+}: {
+  title: string;
+  open: boolean;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/45 p-4 backdrop-blur-sm" onClick={onClose}>
+      <section
+        className="panel max-h-[86vh] w-full max-w-4xl overflow-auto rounded-md p-4"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <h2 className="text-lg font-semibold">{title}</h2>
+          <button className="icon-button" type="button" onClick={onClose} title="关闭">
+            <X size={18} />
+          </button>
+        </div>
+        {children}
+      </section>
+    </div>
+  );
+}
+
 export default function App() {
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [dark, setDark] = useState(() => localStorage.theme === 'dark');
   const [busy, setBusy] = useState(false);
+  const [dragging, setDragging] = useState(false);
   const [sourceFile, setSourceFile] = useState<File | null>(null);
   const [sourceImage, setSourceImage] = useState<RgbaImage | null>(null);
   const [sourcePreview, setSourcePreview] = useState<string>('');
@@ -117,6 +183,8 @@ export default function App() {
   const [result, setResult] = useState<ExtractResult | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const [batchItems, setBatchItems] = useState<BatchItem[]>([]);
+  const [split, setSplit] = useState(50);
+  const [modal, setModal] = useState<ModalKey>(null);
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', dark);
@@ -136,12 +204,22 @@ export default function App() {
   const capacityText = useMemo(() => {
     if (!sourceImage) return '未加载图片';
     const capacity = estimateCapacity(sourceImage, algorithm, repetition);
-    return `${capacity.maxPayloadBytes.toLocaleString()} bytes payload`;
+    return `${capacity.maxPayloadBytes.toLocaleString()} bytes`;
   }, [sourceImage, algorithm, repetition]);
+
+  const statusText = result
+    ? result.ok
+      ? `解析成功，置信度 ${Math.round(result.confidence * 100)}%`
+      : result.reason ?? '解析失败'
+    : watermarkedImage
+      ? '已生成水印图'
+      : sourceImage
+        ? '图片已载入'
+        : '等待图片';
 
   function addLog(message: string) {
     const time = new Date().toLocaleTimeString();
-    setLogs((items) => [`${time} ${message}`, ...items].slice(0, 12));
+    setLogs((items) => [`${time} ${message}`, ...items].slice(0, 16));
   }
 
   async function handleFiles(filesLike: FileList | File[]) {
@@ -185,17 +263,8 @@ export default function App() {
       };
     }
 
-    if (payloadKind === 'json') {
-      JSON.parse(payloadText);
-    }
-
-    return {
-      kind: payloadKind,
-      text: payloadText,
-      compress,
-      encrypt,
-      password,
-    };
+    if (payloadKind === 'json') JSON.parse(payloadText);
+    return { kind: payloadKind, text: payloadText, compress, encrypt, password };
   }
 
   async function handleEmbed() {
@@ -267,11 +336,8 @@ export default function App() {
     }
     try {
       const shared = await shareBlob(await imageDataToBlob(watermarkedImage), 'blind-watermarked.png');
-      if (!shared) {
-        await handleSaveImage();
-      } else {
-        addLog('已调用系统分享');
-      }
+      if (!shared) await handleSaveImage();
+      else addLog('已调用系统分享');
     } catch (error) {
       addLog(error instanceof Error ? error.message : '分享失败');
     }
@@ -334,23 +400,12 @@ export default function App() {
     setBusy(true);
     try {
       const jpeg = await imageRoundTrip(watermarkedImage, 'image/jpeg', 0.88, 1);
-      const jpegResult = await extractWatermark(jpeg, {
-        algorithm,
-        key: keyText,
-        password,
-        strength,
-        repetition,
-      });
+      const jpegResult = await extractWatermark(jpeg, { algorithm, key: keyText, password, strength, repetition });
       const scaled = await imageRoundTrip(watermarkedImage, 'image/png', 0.95, 0.85);
-      const scaledResult = await extractWatermark(scaled, {
-        algorithm,
-        key: keyText,
-        password,
-        strength,
-        repetition,
-      });
+      const scaledResult = await extractWatermark(scaled, { algorithm, key: keyText, password, strength, repetition });
       addLog(`压缩测试：${jpegResult.ok ? '通过' : jpegResult.reason}`);
       addLog(`缩放测试：${scaledResult.ok ? '通过' : scaledResult.reason}`);
+      setModal('logs');
     } catch (error) {
       addLog(error instanceof Error ? error.message : '鲁棒性测试失败');
     } finally {
@@ -359,17 +414,31 @@ export default function App() {
   }
 
   return (
-    <main className="min-h-screen bg-paper text-ink dark:bg-[#111714] dark:text-white">
-      <div className="mx-auto flex w-full max-w-7xl flex-col gap-4 px-4 py-4 sm:px-6 lg:px-8">
-        <header className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <div className="flex items-center gap-2 text-sm font-semibold text-copper">
-              <ShieldCheck size={16} />
+    <main className="min-h-screen bg-paper text-ink dark:bg-[#111714] dark:text-white lg:h-screen lg:overflow-hidden">
+      <input
+        ref={fileInputRef}
+        className="hidden"
+        type="file"
+        accept="image/png,image/jpeg,image/webp"
+        onChange={(event) => {
+          if (event.target.files) void handleFiles(event.target.files);
+          event.currentTarget.value = '';
+        }}
+      />
+
+      <div className="mx-auto flex min-h-screen w-full max-w-[1500px] flex-col gap-3 px-3 py-3 lg:h-screen lg:min-h-0">
+        <header className="panel flex h-auto shrink-0 items-center justify-between gap-3 rounded-md px-3 py-2">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 text-xs font-semibold text-copper">
+              <ShieldCheck size={15} />
               Local-first blind watermark
             </div>
-            <h1 className="mt-1 text-3xl font-bold">盲水印图片生成与解析工具</h1>
+            <h1 className="truncate text-xl font-bold">盲水印图片生成与解析工具</h1>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex shrink-0 items-center gap-2">
+            <button className="icon-button" type="button" onClick={() => setModal('logs')} title="日志">
+              <ListChecks size={18} />
+            </button>
             <a className="icon-button" href="https://github.com/" target="_blank" rel="noreferrer" title="GitHub">
               <Github size={18} />
             </a>
@@ -377,106 +446,273 @@ export default function App() {
           </div>
         </header>
 
-        <ImageDropzone
-          busy={busy}
-          fileName={sourceFile?.name}
-          previewUrl={sourcePreview}
-          onFiles={(files) => void handleFiles(files)}
-        />
-
-        <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
-          <div className="space-y-4">
-            <AdvancedPanel
-              algorithm={algorithm}
-              setAlgorithm={setAlgorithm}
-              keyText={keyText}
-              setKeyText={setKeyText}
-              strength={strength}
-              setStrength={setStrength}
-              repetition={repetition}
-              setRepetition={setRepetition}
-              compress={compress}
-              setCompress={setCompress}
-              encrypt={encrypt}
-              setEncrypt={setEncrypt}
-              password={password}
-              setPassword={setPassword}
-            />
-
-            <div className="grid gap-4 lg:grid-cols-2">
-              <EmbedPanel
-                payloadKind={payloadKind}
-                setPayloadKind={(value) => {
-                  setPayloadKind(value);
-                  if (value === 'json' && payloadText === 'BlindWaterMark local payload') setPayloadText(SAMPLE_JSON);
-                }}
-                payloadText={payloadText}
-                setPayloadText={setPayloadText}
-                payloadFile={payloadFile}
-                setPayloadFile={setPayloadFile}
-                busy={busy}
-                disabled={!sourceImage}
-                onEmbed={() => void handleEmbed()}
-              />
-              <div className="space-y-4">
-                <DetectPanel
-                  algorithm={detectAlgorithm}
-                  setAlgorithm={setDetectAlgorithm}
-                  busy={busy}
-                  disabled={!sourceImage && !watermarkedImage}
-                  onDetect={() => void handleDetect()}
-                />
-                <section className="panel rounded-md p-4">
-                  <div className="mb-4 flex items-center gap-2">
-                    <Activity size={18} />
-                    <h2 className="font-semibold">操作</h2>
-                  </div>
-                  <div className="grid gap-2 sm:grid-cols-3">
-                    <button className="secondary-button" type="button" disabled={!watermarkedImage} onClick={handleSaveImage}>
-                      <Save size={16} />
-                      保存
-                    </button>
-                    <button className="secondary-button" type="button" disabled={!watermarkedImage} onClick={handleShareImage}>
-                      <Share2 size={16} />
-                      分享
-                    </button>
-                    <button className="secondary-button" type="button" disabled={!watermarkedImage || busy} onClick={handleRobustnessTest}>
-                      <FlaskConical size={16} />
-                      测试
-                    </button>
-                  </div>
-                  <div className="mt-3 rounded-md bg-black/[0.04] p-3 text-sm dark:bg-white/[0.06]">
-                    当前容量：{capacityText}
-                  </div>
-                </section>
+        <div className="grid min-h-0 flex-1 gap-3 lg:grid-cols-[minmax(0,1.18fr)_minmax(420px,0.82fr)]">
+          <section className="panel flex min-h-[520px] min-w-0 flex-col overflow-hidden rounded-md lg:min-h-0">
+            <div
+              className={clsx(
+                'flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-black/10 px-3 py-2 dark:border-white/10',
+                dragging && 'bg-mint/80 dark:bg-mint/10',
+              )}
+              onDragOver={(event) => {
+                event.preventDefault();
+                setDragging(true);
+              }}
+              onDragLeave={() => setDragging(false)}
+              onDrop={(event) => {
+                event.preventDefault();
+                setDragging(false);
+                if (event.dataTransfer.files.length) void handleFiles(event.dataTransfer.files);
+              }}
+            >
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 text-sm font-semibold">
+                  <FileImage size={17} />
+                  {sourceFile?.name ?? '拖拽、选择或粘贴图片'}
+                </div>
+                <div className="mt-1 text-xs text-ink/60 dark:text-white/55">
+                  {sourceImage ? `${sourceImage.width}x${sourceImage.height} · 容量 ${capacityText}` : 'PNG / JPEG / WEBP'}
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <CompactButton disabled={busy} onClick={() => fileInputRef.current?.click()}>
+                  <Upload size={16} />
+                  选择图片
+                </CompactButton>
+                <CompactButton disabled={!watermarkedImage} onClick={() => void handleSaveImage()}>
+                  <Save size={16} />
+                  保存
+                </CompactButton>
+                <CompactButton disabled={!watermarkedImage} onClick={() => void handleShareImage()}>
+                  <Share2 size={16} />
+                  分享
+                </CompactButton>
               </div>
             </div>
 
-            <PreviewCompare original={sourcePreview} watermarked={watermarkedPreview} />
-          </div>
+            <div className="relative min-h-0 flex-1 bg-white/55 dark:bg-black/20">
+              {sourcePreview ? (
+                <img className="absolute inset-0 h-full w-full object-contain p-3" src={sourcePreview} alt="原图" />
+              ) : (
+                <div className="flex h-full items-center justify-center p-6 text-center text-sm text-ink/55 dark:text-white/55">
+                  载入图片后可直接嵌入或解析盲水印
+                </div>
+              )}
 
-          <aside className="space-y-4">
-            <ResultPanel
-              result={result}
-              onCopy={() => void handleCopyResult()}
-              onExportJson={() => void handleExportJson()}
-              onExportFile={() => void handleExportFile()}
+              {watermarkedPreview ? (
+                <img
+                  className="absolute inset-0 h-full w-full object-contain p-3"
+                  src={watermarkedPreview}
+                  alt="水印图"
+                  style={{ clipPath: `inset(0 ${100 - split}% 0 0)` }}
+                />
+              ) : null}
+
+              {watermarkedPreview ? (
+                <div className="absolute bottom-3 left-3 right-3 flex items-center gap-3 rounded-md border border-black/10 bg-white/90 px-3 py-2 shadow-sm backdrop-blur dark:border-white/10 dark:bg-black/70">
+                  <Columns2 size={16} />
+                  <input
+                    className="min-w-0 flex-1"
+                    type="range"
+                    min={0}
+                    max={100}
+                    value={split}
+                    onChange={(event) => setSplit(Number(event.target.value))}
+                  />
+                  <span className="w-16 text-right text-xs font-semibold">水印 {split}%</span>
+                </div>
+              ) : null}
+            </div>
+          </section>
+
+          <section className="panel flex min-h-[520px] min-w-0 flex-col gap-3 overflow-hidden rounded-md p-3 lg:min-h-0">
+            <div className="grid shrink-0 grid-cols-2 gap-2">
+              <div className="segmented grid-cols-2">
+                {(['dct', 'lsb'] as const).map((item) => (
+                  <button key={item} type="button" data-active={algorithm === item} onClick={() => setAlgorithm(item)}>
+                    {item.toUpperCase()}
+                  </button>
+                ))}
+              </div>
+              <div className="segmented grid-cols-3">
+                {(['auto', 'dct', 'lsb'] as const).map((item) => (
+                  <button
+                    key={item}
+                    type="button"
+                    data-active={detectAlgorithm === item}
+                    onClick={() => setDetectAlgorithm(item)}
+                  >
+                    {item === 'auto' ? 'AUTO' : item.toUpperCase()}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="grid shrink-0 gap-2 sm:grid-cols-[1fr_112px_96px]">
+              <input
+                className="control h-10"
+                value={keyText}
+                onChange={(event) => setKeyText(event.target.value)}
+                placeholder="密钥，可留空"
+              />
+              <select className="control h-10" value={repetition} onChange={(event) => setRepetition(Number(event.target.value))}>
+                <option value={1}>1x 冗余</option>
+                <option value={3}>3x 冗余</option>
+                <option value={5}>5x 冗余</option>
+              </select>
+              <div className="control flex h-10 items-center gap-2 px-2">
+                <span className="text-xs font-semibold">强度</span>
+                <input
+                  className="min-w-0 flex-1"
+                  type="range"
+                  min={8}
+                  max={64}
+                  step={2}
+                  value={strength}
+                  onChange={(event) => setStrength(Number(event.target.value))}
+                />
+              </div>
+            </div>
+
+            <div className="flex shrink-0 flex-wrap items-center gap-2">
+              <div className="segmented grid w-52 grid-cols-3">
+                {(['text', 'json', 'file'] as const).map((kind) => (
+                  <button
+                    key={kind}
+                    type="button"
+                    data-active={payloadKind === kind}
+                    onClick={() => {
+                      setPayloadKind(kind);
+                      if (kind === 'json' && payloadText === 'BlindWaterMark local payload') setPayloadText(SAMPLE_JSON);
+                    }}
+                  >
+                    {kind === 'text' ? '文本' : kind === 'json' ? 'JSON' : '文件'}
+                  </button>
+                ))}
+              </div>
+              <label
+                className={clsx(
+                  'secondary-button min-h-10 cursor-pointer px-3',
+                  compress && 'border-copper bg-mint/70 text-ink dark:bg-mint dark:text-ink',
+                )}
+              >
+                <Archive size={16} />
+                压缩
+                <input className="sr-only" type="checkbox" checked={compress} onChange={(event) => setCompress(event.target.checked)} />
+              </label>
+              <label
+                className={clsx(
+                  'secondary-button min-h-10 cursor-pointer px-3',
+                  encrypt && 'border-copper bg-mint/70 text-ink dark:bg-mint dark:text-ink',
+                )}
+              >
+                <Lock size={16} />
+                加密
+                <input className="sr-only" type="checkbox" checked={encrypt} onChange={(event) => setEncrypt(event.target.checked)} />
+              </label>
+            </div>
+
+            <div className="min-h-0 flex-1">
+              {payloadKind === 'file' ? (
+                <label className="flex h-full min-h-28 cursor-pointer flex-col items-center justify-center rounded-md border border-dashed border-black/20 bg-paper/70 p-4 text-center text-sm dark:border-white/15 dark:bg-black/20">
+                  <Upload size={22} />
+                  <span className="mt-2">{payloadFile?.name ?? '选择小型文件 payload'}</span>
+                  <input className="hidden" type="file" onChange={(event) => setPayloadFile(event.target.files?.[0] ?? null)} />
+                </label>
+              ) : (
+                <textarea
+                  className="control h-full min-h-28 w-full resize-none"
+                  value={payloadText}
+                  onChange={(event) => setPayloadText(event.target.value)}
+                  spellCheck={false}
+                  placeholder={payloadKind === 'json' ? SAMPLE_JSON : '输入要嵌入的文本'}
+                />
+              )}
+            </div>
+
+            <input
+              className="control h-10 shrink-0"
+              type="password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              placeholder="payload 加密/解析密码"
             />
-            <MetadataPanel metadata={metadata} />
-            <BatchPanel
-              items={batchItems}
-              busy={busy}
-              onFiles={handleBatchFiles}
-              onProcess={() => void handleBatchProcess()}
-            />
-            <StatusLog logs={logs} />
-          </aside>
+
+            <div className="grid shrink-0 grid-cols-2 gap-2">
+              <CompactButton tone="primary" disabled={!sourceImage || busy} onClick={() => void handleEmbed()}>
+                <Play size={17} />
+                嵌入水印
+              </CompactButton>
+              <CompactButton disabled={(!sourceImage && !watermarkedImage) || busy} onClick={() => void handleDetect()}>
+                <SearchCheck size={17} />
+                检测解析
+              </CompactButton>
+            </div>
+
+            <div className="grid shrink-0 grid-cols-4 gap-2">
+              <CompactButton disabled={!watermarkedImage || busy} onClick={() => void handleRobustnessTest()}>
+                <FlaskConical size={16} />
+                测试
+              </CompactButton>
+              <CompactButton onClick={() => setModal('result')}>
+                <PackageOpen size={16} />
+                结果
+              </CompactButton>
+              <CompactButton onClick={() => setModal('metadata')}>
+                <Info size={16} />
+                元数据
+              </CompactButton>
+              <CompactButton onClick={() => setModal('batch')}>
+                <Layers size={16} />
+                批量
+              </CompactButton>
+            </div>
+
+            <div className="shrink-0 rounded-md border border-black/10 bg-white/70 p-3 text-sm dark:border-white/10 dark:bg-white/[0.06]">
+              <div className="flex items-center justify-between gap-3">
+                <span className="min-w-0 truncate font-semibold">{statusText}</span>
+                {busy ? <span className="shrink-0 text-copper">处理中</span> : null}
+              </div>
+              {result?.payload?.text ? (
+                <div className="mt-2 line-clamp-2 break-words text-ink/65 dark:text-white/60">{result.payload.text}</div>
+              ) : null}
+            </div>
+          </section>
         </div>
 
-        <footer className="pb-4 text-sm text-ink/60 dark:text-white/55">
-          DCT 默认模式适合 PNG 与轻度 JPEG 流程；强压缩、裁剪、重采样会降低解析成功率。
+        <footer className="panel flex shrink-0 items-center justify-between gap-3 rounded-md px-3 py-2 text-xs text-ink/65 dark:text-white/60">
+          <span className="min-w-0 truncate">DCT 适合 PNG 与轻度 JPEG；强压缩、裁剪、重采样会降低解析成功率。</span>
+          <button className="inline-flex shrink-0 items-center gap-1 font-semibold text-copper" type="button" onClick={() => setModal('logs')}>
+            <Activity size={14} />
+            查看日志
+          </button>
         </footer>
       </div>
+
+      <Modal title="解析结果" open={modal === 'result'} onClose={() => setModal(null)}>
+        <ResultPanel
+          result={result}
+          onCopy={() => void handleCopyResult()}
+          onExportJson={() => void handleExportJson()}
+          onExportFile={() => void handleExportFile()}
+        />
+      </Modal>
+
+      <Modal title="图片元数据" open={modal === 'metadata'} onClose={() => setModal(null)}>
+        <MetadataPanel metadata={metadata} />
+      </Modal>
+
+      <Modal title="操作日志" open={modal === 'logs'} onClose={() => setModal(null)}>
+        <StatusLog logs={logs} />
+      </Modal>
+
+      <Modal title="批量处理" open={modal === 'batch'} onClose={() => setModal(null)}>
+        <BatchPanel
+          items={batchItems}
+          busy={busy}
+          onFiles={handleBatchFiles}
+          onProcess={() => void handleBatchProcess()}
+        />
+      </Modal>
     </main>
   );
 }
