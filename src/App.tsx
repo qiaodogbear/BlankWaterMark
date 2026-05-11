@@ -26,6 +26,7 @@ import { MetadataPanel } from './components/MetadataPanel';
 import { ResultPanel } from './components/ResultPanel';
 import { StatusLog } from './components/StatusLog';
 import { ThemeToggle } from './components/ThemeToggle';
+import { measureWatermarkUsage, type WatermarkUsage } from './lib/capacity';
 import {
   embedWatermark,
   estimateCapacity,
@@ -56,6 +57,26 @@ interface BatchItem {
 type ModalKey = 'result' | 'metadata' | 'logs' | 'batch' | null;
 
 const SAMPLE_JSON = '{\n  "owner": "Alice",\n  "asset": "campaign-2026-05",\n  "license": "internal"\n}';
+
+const EMBED_ALGORITHMS: Array<{
+  id: ConcreteWatermarkAlgorithm;
+  title: string;
+  subtitle: string;
+  bestFor: string;
+}> = [
+  {
+    id: 'dct',
+    title: '稳健盲水印',
+    subtitle: 'DCT 频域',
+    bestFor: '推荐。适合版权追踪，可承受轻度压缩。',
+  },
+  {
+    id: 'lsb',
+    title: '轻量隐写',
+    subtitle: 'LSB 像素位',
+    bestFor: '容量更大。适合本地传输，不适合 JPEG 重压缩。',
+  },
+];
 
 function isTauriRuntime(): boolean {
   return '__TAURI_INTERNALS__' in window;
@@ -185,6 +206,7 @@ export default function App() {
   const [batchItems, setBatchItems] = useState<BatchItem[]>([]);
   const [split, setSplit] = useState(50);
   const [modal, setModal] = useState<ModalKey>(null);
+  const [capacityUsage, setCapacityUsage] = useState<WatermarkUsage | null>(null);
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', dark);
@@ -206,6 +228,45 @@ export default function App() {
     const capacity = estimateCapacity(sourceImage, algorithm, repetition);
     return `${capacity.maxPayloadBytes.toLocaleString()} bytes`;
   }, [sourceImage, algorithm, repetition]);
+
+  useEffect(() => {
+    let active = true;
+
+    async function updateUsage() {
+      let payload: PayloadInput | null = null;
+
+      if (payloadKind === 'file') {
+        if (payloadFile) {
+          payload = {
+            kind: 'file',
+            bytes: new Uint8Array(await payloadFile.arrayBuffer()),
+            fileName: payloadFile.name,
+            mimeType: payloadFile.type || 'application/octet-stream',
+            compress,
+            encrypt,
+            password,
+          };
+        }
+      } else {
+        payload = {
+          kind: payloadKind,
+          text: payloadText,
+          compress,
+          encrypt,
+          password,
+        };
+      }
+
+      const usage = await measureWatermarkUsage(sourceImage, algorithm, repetition, payload);
+      if (active) setCapacityUsage(usage);
+    }
+
+    void updateUsage();
+
+    return () => {
+      active = false;
+    };
+  }, [algorithm, compress, encrypt, password, payloadFile, payloadKind, payloadText, repetition, sourceImage]);
 
   const statusText = result
     ? result.ok
@@ -525,15 +586,34 @@ export default function App() {
           </section>
 
           <section className="panel flex min-h-[520px] min-w-0 flex-col gap-3 overflow-hidden rounded-md p-3 lg:min-h-0">
-            <div className="grid shrink-0 grid-cols-2 gap-2">
-              <div className="segmented grid-cols-2">
-                {(['dct', 'lsb'] as const).map((item) => (
-                  <button key={item} type="button" data-active={algorithm === item} onClick={() => setAlgorithm(item)}>
-                    {item.toUpperCase()}
-                  </button>
-                ))}
-              </div>
-              <div className="segmented grid-cols-3">
+            <div className="grid shrink-0 gap-2 sm:grid-cols-2">
+              {EMBED_ALGORITHMS.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  className={clsx(
+                    'rounded-md border p-3 text-left transition',
+                    algorithm === item.id
+                      ? 'border-copper bg-mint/75 text-ink shadow-sm dark:bg-mint dark:text-ink'
+                      : 'border-black/10 bg-white/80 hover:border-copper dark:border-white/10 dark:bg-white/[0.06]',
+                  )}
+                  onClick={() => setAlgorithm(item.id)}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-sm font-semibold">{item.title}</span>
+                    <span className="rounded bg-black/10 px-1.5 py-0.5 text-[11px] font-bold dark:bg-white/15">
+                      {item.subtitle}
+                    </span>
+                  </div>
+                  <div className="mt-1 text-xs leading-5 text-ink/65 dark:text-white/60">{item.bestFor}</div>
+                </button>
+              ))}
+            </div>
+
+            <div className="grid shrink-0 gap-2 sm:grid-cols-[1fr_auto]">
+              <div>
+                <div className="mb-1 text-xs font-semibold text-ink/60 dark:text-white/55">解析策略</div>
+                <div className="segmented grid-cols-3">
                 {(['auto', 'dct', 'lsb'] as const).map((item) => (
                   <button
                     key={item}
@@ -541,24 +621,41 @@ export default function App() {
                     data-active={detectAlgorithm === item}
                     onClick={() => setDetectAlgorithm(item)}
                   >
-                    {item === 'auto' ? 'AUTO' : item.toUpperCase()}
+                    {item === 'auto' ? '自动' : item === 'dct' ? '稳健' : '轻量'}
                   </button>
                 ))}
+                </div>
+              </div>
+              <div>
+                <div className="mb-1 text-xs font-semibold text-ink/60 dark:text-white/55">冗余倍率</div>
+                <div className="segmented grid w-64 grid-cols-3">
+                  {[
+                    { value: 1, label: '1x', hint: '容量高' },
+                    { value: 3, label: '3x', hint: '推荐' },
+                    { value: 5, label: '5x', hint: '更稳' },
+                  ].map((item) => (
+                    <button
+                      key={item.value}
+                      type="button"
+                      data-active={repetition === item.value}
+                      onClick={() => setRepetition(item.value)}
+                      title={`${item.label} 冗余：${item.hint}`}
+                    >
+                      <span className="block leading-4">{item.label}</span>
+                      <span className="block text-[10px] font-medium opacity-70">{item.hint}</span>
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
 
-            <div className="grid shrink-0 gap-2 sm:grid-cols-[1fr_112px_96px]">
+            <div className="grid shrink-0 gap-2 sm:grid-cols-[1fr_140px]">
               <input
                 className="control h-10"
                 value={keyText}
                 onChange={(event) => setKeyText(event.target.value)}
                 placeholder="密钥，可留空"
               />
-              <select className="control h-10" value={repetition} onChange={(event) => setRepetition(Number(event.target.value))}>
-                <option value={1}>1x 冗余</option>
-                <option value={3}>3x 冗余</option>
-                <option value={5}>5x 冗余</option>
-              </select>
               <div className="control flex h-10 items-center gap-2 px-2">
                 <span className="text-xs font-semibold">强度</span>
                 <input
@@ -636,6 +733,9 @@ export default function App() {
               onChange={(event) => setPassword(event.target.value)}
               placeholder="payload 加密/解析密码"
             />
+            <div className="shrink-0 rounded-md bg-black/[0.04] px-3 py-2 text-xs leading-5 text-ink/65 dark:bg-white/[0.06] dark:text-white/60">
+              密钥用于控制水印位置；开启加密后，payload 内容使用 AES-GCM 加密，解析时必须输入相同密码。
+            </div>
 
             <div className="grid shrink-0 grid-cols-2 gap-2">
               <CompactButton tone="primary" disabled={!sourceImage || busy} onClick={() => void handleEmbed()}>
@@ -671,6 +771,28 @@ export default function App() {
               <div className="flex items-center justify-between gap-3">
                 <span className="min-w-0 truncate font-semibold">{statusText}</span>
                 {busy ? <span className="shrink-0 text-copper">处理中</span> : null}
+              </div>
+              <div className="mt-3">
+                <div className="mb-1 flex items-center justify-between gap-3 text-xs text-ink/60 dark:text-white/55">
+                  <span>水印数据占用</span>
+                  <span className="font-semibold">{capacityUsage?.label ?? '未计算'}</span>
+                </div>
+                <div className="h-2 overflow-hidden rounded-full bg-black/10 dark:bg-white/10">
+                  <div
+                    className={clsx(
+                      'h-full rounded-full transition-all',
+                      capacityUsage && !capacityUsage.ok ? 'bg-red-500' : 'bg-copper',
+                    )}
+                    style={{ width: `${Math.max(0, Math.min(100, capacityUsage?.percent ?? 0))}%` }}
+                  />
+                </div>
+                {capacityUsage?.reason ? (
+                  <div className="mt-1 text-xs text-copper">{capacityUsage.reason}</div>
+                ) : (
+                  <div className="mt-1 text-xs text-ink/55 dark:text-white/50">
+                    进度越高越接近图片容量上限，建议保留余量以提高解析稳定性。
+                  </div>
+                )}
               </div>
               {result?.payload?.text ? (
                 <div className="mt-2 line-clamp-2 break-words text-ink/65 dark:text-white/60">{result.payload.text}</div>
