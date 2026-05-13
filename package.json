@@ -15,6 +15,7 @@
     "tauri:android:build": "tauri android build",
     "android:setup": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup-android-env.ps1",
     "android:apk": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-android-apk.ps1",
+    "android:verify": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-android-apk.ps1",
     "test": "vitest run",
     "lint": "eslint .",
     "examples": "node scripts/generate-examples.mjs",

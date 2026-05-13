@@ -91,6 +91,12 @@ dist-android\BlindWaterMark-aarch64-debug.apk
 dist-android\BlindWaterMark-aarch64-debug.apk.sha256
 ```
 
+The build script also verifies that the APK is signed, targets the expected package name and ABI, and contains the Tauri Android JNI exports required by `Rust.create/start/ipc`. You can run that check directly:
+
+```powershell
+npm run android:verify
+```
+
 `dist-android` is ignored by Git because APKs are build artifacts.
 `src-tauri\gen\android` is also ignored because Tauri regenerates it with machine-specific Cargo registry paths.
 
@@ -121,3 +127,4 @@ Use `x86_64` mainly for emulators.
 - `NDK was not installed`: rerun setup and check that the Android SDK license step completed.
 - `ANDROID_HOME is not visible in a new shell`: close and reopen PowerShell because user environment changes are loaded at process start.
 - Gradle download is slow or fails: rerun `npm run android:apk`; Gradle caches downloaded dependencies and usually resumes cleanly.
+- `No implementation found for Rust.create`: rebuild with the latest source and run `npm run android:verify`. The verifier checks that the native library exports the JNI symbols required by Tauri Android.

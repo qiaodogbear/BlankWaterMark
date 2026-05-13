@@ -122,6 +122,7 @@ function Invoke-GradleApkFallback {
     $assembleTask = ":app:assemble$($TargetInfo.GradleFlavor)Debug"
     $skipRustTask = ":app:rustBuild$($TargetInfo.GradleFlavor)Debug"
     $gradleArgs = @(
+      ":app:clean",
       $assembleTask,
       "-x",
       $skipRustTask,
@@ -138,11 +139,36 @@ function Invoke-GradleApkFallback {
   }
 }
 
+function Clear-AndroidBuildArtifacts {
+  param(
+    [string]$ArtifactPath,
+    [hashtable]$TargetInfo
+  )
+
+  $candidatePaths = @(
+    $ArtifactPath,
+    "$ArtifactPath.sha256",
+    "src-tauri\gen\android\app\build\outputs\apk\$($TargetInfo.OutputFlavor)\debug",
+    "src-tauri\gen\android\app\build\intermediates\merged_native_libs",
+    "src-tauri\gen\android\app\build\intermediates\stripped_native_libs",
+    "src-tauri\gen\android\app\build\intermediates\merged_jni_libs"
+  )
+
+  foreach ($path in $candidatePaths) {
+    if (Test-Path $path) {
+      Remove-Item -LiteralPath $path -Recurse -Force
+    }
+  }
+}
+
 Set-Location (Resolve-Path "$PSScriptRoot\..")
 
 Use-AndroidEnvironment -SdkRoot $AndroidSdkRoot -NdkVersion $NdkVersion
 $targetInfo = Get-AndroidTargetInfo -Target $Target
 $isWindowsHost = [Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT
+$distAndroid = "dist-android"
+$artifactName = "BlindWaterMark-$Target-debug.apk"
+$artifactPath = Join-Path $distAndroid $artifactName
 
 Write-Step "Validating required commands"
 foreach ($command in @("node", "npm", "cargo", "rustup")) {
@@ -192,6 +218,8 @@ else {
   Write-Step "Tauri Android project already initialized"
 }
 
+Clear-AndroidBuildArtifacts -ArtifactPath $artifactPath -TargetInfo $targetInfo
+
 Write-Step "Building debug APK for $Target"
 npm exec -- tauri android build --debug --apk --target $Target --ci
 if ($LASTEXITCODE -ne 0) {
@@ -218,10 +246,7 @@ if (-not $apk) {
   throw "No APK was produced under $outputsRoot."
 }
 
-$distAndroid = "dist-android"
 New-Item -ItemType Directory -Force $distAndroid | Out-Null
-$artifactName = "BlindWaterMark-$Target-debug.apk"
-$artifactPath = Join-Path $distAndroid $artifactName
 Copy-Item -Force -LiteralPath $apk.FullName -Destination $artifactPath
 
 $hash = Get-FileHash -Algorithm SHA256 -LiteralPath $artifactPath
@@ -231,3 +256,12 @@ $hashPath = "$artifactPath.sha256"
 Write-Step "Android APK is ready"
 Write-Host "APK: $((Resolve-Path $artifactPath).Path)"
 Write-Host "SHA256: $($hash.Hash)"
+
+Write-Step "Verifying Android APK artifact"
+$resolvedArtifactPath = (Resolve-Path $artifactPath).Path
+& "$PSScriptRoot\verify-android-apk.ps1" `
+  -ApkPath $resolvedArtifactPath `
+  -AndroidSdkRoot $AndroidSdkRoot `
+  -NdkVersion $NdkVersion `
+  -Abi $targetInfo.Abi
+Assert-LastExitCode "Android APK verification"
