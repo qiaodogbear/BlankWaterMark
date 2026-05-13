@@ -1,64 +1,123 @@
-# Android Build Notes
+# Android APK Build Notes
 
-The repository contains Tauri v2 Android-capable configuration and npm scripts. Android build output still requires local mobile toolchains.
+This project uses Tauri v2 mobile support to build the same React/Rust application as an Android APK. All image processing stays local on the device.
 
-## Required Tools
+Official references:
 
-- Rust and Cargo
-- Node.js 20+
-- Android Studio
-- Android SDK Platform Tools
-- Android SDK Build Tools
-- Android NDK
-- JDK 17+
-- Tauri CLI installed through project dev dependency
+- Tauri Android prerequisites: https://v2.tauri.app/start/prerequisites/
+- Android Studio and command-line tools: https://developer.android.com/studio
 
-## Rust Targets
+## Default Windows Paths
 
-Install mobile targets as needed:
+The automation scripts use C-drive paths so the Android toolchain is stable across shells:
 
 ```powershell
-rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android
+ANDROID_HOME=C:\Users\15224\AppData\Local\Android\Sdk
+ANDROID_SDK_ROOT=C:\Users\15224\AppData\Local\Android\Sdk
+NDK_HOME=C:\Users\15224\AppData\Local\Android\Sdk\ndk\27.2.12479018
+JAVA_HOME=C:\Program Files\Android\Android Studio\jbr
 ```
 
-## Environment Variables
-
-Set these to match your Android Studio installation:
+The scripts also add these user PATH entries when missing:
 
 ```powershell
-$env:ANDROID_HOME = "$env:LOCALAPPDATA\Android\Sdk"
-$env:NDK_HOME = "$env:ANDROID_HOME\ndk\<installed-version>"
-$env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"
+%USERPROFILE%\.cargo\bin
+C:\Users\15224\AppData\Local\Android\Sdk\cmdline-tools\latest\bin
+C:\Users\15224\AppData\Local\Android\Sdk\platform-tools
+C:\Users\15224\AppData\Local\Android\Sdk\emulator
 ```
 
-Add platform tools to PATH:
+## One-Time Environment Setup
+
+Run from the repository root:
 
 ```powershell
-$env:Path = "$env:ANDROID_HOME\platform-tools;$env:Path"
+npm run android:setup
 ```
 
-## Initialize Android Project
+This script installs or configures:
+
+- Android Studio through `winget`
+- Android command-line tools from the official Android download page
+- SDK platform `android-36`
+- Build Tools `35.0.0`
+- NDK `27.2.12479018`
+- CMake `3.22.1`
+- Rust Android targets:
+  - `aarch64-linux-android`
+  - `armv7-linux-androideabi`
+  - `i686-linux-android`
+  - `x86_64-linux-android`
+
+Close and reopen PowerShell after setup if another terminal cannot see the new user environment variables.
+
+## Build the APK
+
+Run:
 
 ```powershell
-npm run tauri:android:init
+npm run android:apk
 ```
 
-This generates `src-tauri/gen/android/`. The generated folder is machine/toolchain-specific and can be recreated.
-
-## Development Run
+The build script runs the normal project checks first:
 
 ```powershell
-npm run tauri:android:dev
+npm install
+npm run lint
+npm test
+npm run build
+cd src-tauri
+cargo test
 ```
 
-## APK/AAB Build
+Then it initializes the Tauri Android project if needed:
 
 ```powershell
-npm run tauri:android:build
+npm exec -- tauri android init --ci
 ```
 
-Generated APK/AAB paths are printed by Tauri/Gradle, usually under `src-tauri/gen/android/app/build/outputs/`.
+Finally it builds an ARM64 debug APK:
 
-## Current Repository Behavior
+```powershell
+npm exec -- tauri android build --debug --apk --target aarch64 --ci
+```
 
-The React UI already supports mobile image selection through standard file inputs and system sharing through Web Share API when available. Native Android sharing can be added later through a Tauri mobile plugin if product requirements demand deeper OS integration.
+On Windows, Tauri may fail to create a symlink into Android `jniLibs` when Developer Mode is disabled. `scripts/build-android-apk.ps1` handles this automatically by copying the generated Rust `.so` and running the matching Gradle `assemble*Debug` task without the symlink step.
+
+The final copied artifact is:
+
+```powershell
+dist-android\BlindWaterMark-aarch64-debug.apk
+dist-android\BlindWaterMark-aarch64-debug.apk.sha256
+```
+
+`dist-android` is ignored by Git because APKs are build artifacts.
+`src-tauri\gen\android` is also ignored because Tauri regenerates it with machine-specific Cargo registry paths.
+
+## Install on a Phone
+
+Enable USB debugging on the Android device, connect it, then run:
+
+```powershell
+adb devices
+adb install -r dist-android\BlindWaterMark-aarch64-debug.apk
+```
+
+## Other Targets
+
+Modern Android phones usually need `aarch64`. For another ABI:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/build-android-apk.ps1 -Target armv7
+powershell -ExecutionPolicy Bypass -File scripts/build-android-apk.ps1 -Target x86_64
+```
+
+Use `x86_64` mainly for emulators.
+
+## Common Failures
+
+- `JAVA_HOME is not valid`: run `npm run android:setup` or confirm Android Studio exists at `C:\Program Files\Android\Android Studio`.
+- `sdkmanager was not installed`: remove a partial `C:\Users\15224\AppData\Local\Android\Sdk\cmdline-tools\latest` folder and rerun setup.
+- `NDK was not installed`: rerun setup and check that the Android SDK license step completed.
+- `ANDROID_HOME is not visible in a new shell`: close and reopen PowerShell because user environment changes are loaded at process start.
+- Gradle download is slow or fails: rerun `npm run android:apk`; Gradle caches downloaded dependencies and usually resumes cleanly.
